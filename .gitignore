@@ -1,0 +1,28 @@
+# Secrets — NEVER commit
+.env
+**/.env
+!*.env.example
+*.key
+*.pem
+*.crt
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# Local embeddings model cache (downloaded at runtime)
+.fastembed_cache/
+**/.fastembed_cache/
+
+# Logs / tmp / os
+*.log
+tmp/
+.DS_Store
+Thumbs.db
+
+# Node (tooling, if any)
+node_modules/

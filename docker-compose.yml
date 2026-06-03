@@ -1,0 +1,67 @@
+name: agnt-scale
+services:
+  hermes:
+    build:
+      context: ./Hermes
+      dockerfile: Dockerfile
+    container_name: agnt-hermes
+    restart: unless-stopped
+    env_file: ./Hermes/.env
+    environment:
+      HERMES_HOST: "0.0.0.0"
+      HERMES_PORT: "7778"
+      REDIS_URL: "redis://redis:6379"
+      QDRANT_URL: "http://qdrant:6333"
+    ports:
+      - "7778:7777"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    networks:
+      - agnt-internal
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: agnt-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: agnt
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+      POSTGRES_DB: agnt
+    volumes:
+      - agnt-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agnt -d agnt"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks:
+      - agnt-internal
+  redis:
+    image: redis:7-alpine
+    container_name: agnt-redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - agnt-internal
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: agnt-qdrant
+    restart: unless-stopped
+    volumes:
+      - agnt-qdrant:/qdrant/storage
+    networks:
+      - agnt-internal
+networks:
+  agnt-internal:
+    driver: bridge
+volumes:
+  agnt-qdrant:
+  agnt-pgdata:
