@@ -24,6 +24,7 @@ from services.llm_router import call_llm
 from services import agnt_memory as mem
 from services.meta import tools as meta_tools
 from services.meta import architect as meta_architect
+from services.meta import executor as meta_executor
 from agents import AGENTS
 
 router = APIRouter(tags=["agnt"])
@@ -418,3 +419,44 @@ async def campaign_plan(req: CampaignPlanRequest):
         pass
     return {"blueprint": bp, "plan": plan, "approval_required": True,
             "note": "DRY-RUN — nothing created. Approve each action to execute (needs ads_management)."}
+
+
+class CampaignExecuteRequest(BaseModel):
+    account_id: Optional[str] = None
+    ad_account_id: str
+    meta_token: Optional[str] = None
+    blueprint: dict[str, Any]
+    pixel_id: Optional[str] = None
+    approve: bool = False
+
+
+@router.post("/campaign/execute")
+async def campaign_execute(req: CampaignExecuteRequest):
+    """Execute an APPROVED blueprint live (creates campaign + ad sets, PAUSED).
+    Requires approve=true (user reviewed the dry-run plan) + a Meta token with
+    ads_management. Without write access Meta returns a permission error (surfaced)."""
+    if not req.approve:
+        raise HTTPException(status_code=400, detail="approval required: set approve=true after reviewing the dry-run plan")
+    mock = os.environ.get("META_MOCK", "0").lower() in ("1", "true", "yes")
+    if not req.meta_token and not mock:
+        raise HTTPException(status_code=409, detail="no Meta token (connect Meta; live create needs ads_management)")
+    if "objective" not in req.blueprint:
+        raise HTTPException(status_code=400, detail="blueprint missing objective")
+    try:
+        result = await meta_executor.execute_plan(
+            req.blueprint, req.ad_account_id, req.meta_token, pixel_id=req.pixel_id,
+        )
+    except Exception as e:  # noqa: BLE001
+        log.exception("campaign execute failed")
+        raise HTTPException(status_code=502, detail=f"execute failed: {e}")
+    try:
+        await mem.remember(
+            req.account_id or "_global", "ad_setting",
+            f"EXECUTED [{req.blueprint.get('objective')}] campaign {result.get('campaign_id')} "
+            f"+ {len(result.get('adset_ids', []))} ad sets (PAUSED) on {req.ad_account_id}",
+            kind="execution", scope="long", ad_account_id=req.ad_account_id,
+            meta={"campaign_id": result.get("campaign_id")},
+        )
+    except Exception:  # noqa: BLE001
+        pass
+    return result
