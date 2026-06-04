@@ -25,6 +25,7 @@ from services import agnt_memory as mem
 from services.meta import tools as meta_tools
 from services.meta import architect as meta_architect
 from services.meta import executor as meta_executor
+from services.meta import watcher as meta_watcher
 from agents import AGENTS
 
 router = APIRouter(tags=["agnt"])
@@ -377,6 +378,7 @@ async def meta(req: MetaReadRequest):
         return {"tool": req.tool, "count": len(data) if isinstance(data, list) else None, "data": data}
     except Exception as e:  # noqa: BLE001
         log.exception("meta tool failed")
+        await meta_watcher.capture_error(e, context=f"meta/{req.tool}")
         raise HTTPException(status_code=502, detail=f"meta error: {e}")
 
 
@@ -448,6 +450,7 @@ async def campaign_execute(req: CampaignExecuteRequest):
         )
     except Exception as e:  # noqa: BLE001
         log.exception("campaign execute failed")
+        await meta_watcher.capture_error(e, context="campaign/execute")
         raise HTTPException(status_code=502, detail=f"execute failed: {e}")
     try:
         await mem.remember(
@@ -460,3 +463,12 @@ async def campaign_execute(req: CampaignExecuteRequest):
     except Exception:  # noqa: BLE001
         pass
     return result
+
+
+@router.post("/meta/learn")
+async def meta_learn():
+    """Continuous-learning tick (cron): version check + recent platform learnings.
+    Drift is also captured automatically whenever a live Meta call errors."""
+    version = await meta_watcher.check_version()
+    learnings = await meta_watcher.recent_learnings(limit=10)
+    return {"version": version, "recent_learnings": learnings, "count": len(learnings)}
