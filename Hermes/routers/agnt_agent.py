@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from typing import Any, Optional
 
@@ -21,6 +22,7 @@ from pydantic import BaseModel
 
 from services.llm_router import call_llm
 from services import agnt_memory as mem
+from services.meta import tools as meta_tools
 from agents import AGENTS
 
 router = APIRouter(tags=["agnt"])
@@ -330,3 +332,47 @@ async def memory_search(req: SearchRequest):
          "score": round(float(r["score"]), 3), "content": str(r["content"])[:220]}
         for r in rows
     ]}
+
+
+# ── Meta Ads read (token forwarded per-workspace from the app proxy) ───────────
+
+class MetaReadRequest(BaseModel):
+    account_id: Optional[str] = None       # workspace id (injected by the proxy)
+    tool: str
+    ad_account_id: Optional[str] = None    # Meta act_<id> (for account-scoped tools)
+    meta_token: Optional[str] = None       # decrypted workspace Meta token
+    args: dict[str, Any] = {}
+
+
+_META_READ = {
+    "list_ad_accounts": meta_tools.list_ad_accounts,
+    "get_insights": meta_tools.get_insights,
+    "list_campaigns": meta_tools.list_campaigns,
+    "list_adsets": meta_tools.list_adsets,
+    "list_ads": meta_tools.list_ads,
+    "list_pixels": meta_tools.list_pixels,
+    "search_interests": meta_tools.search_interests,
+}
+
+
+@router.post("/meta")
+async def meta(req: MetaReadRequest):
+    """Read-only Meta Ads tools. Uses the workspace's own token (reused OAuth
+    connection). Write tools stay dry-run + approval-gated elsewhere."""
+    fn = _META_READ.get(req.tool)
+    if not fn:
+        raise HTTPException(status_code=400, detail=f"unsupported meta tool: {req.tool}")
+    if not req.meta_token and os.environ.get("META_MOCK", "0").lower() not in ("1", "true", "yes"):
+        raise HTTPException(status_code=409, detail="no active Meta connection for this workspace")
+    try:
+        if req.tool == "list_ad_accounts":
+            data = await fn(token=req.meta_token)
+        elif req.tool == "search_interests":
+            data = await fn(req.args.get("query", ""), token=req.meta_token)
+        else:
+            acct = req.ad_account_id or req.account_id
+            data = await fn(acct, token=req.meta_token, **req.args)
+        return {"tool": req.tool, "count": len(data) if isinstance(data, list) else None, "data": data}
+    except Exception as e:  # noqa: BLE001
+        log.exception("meta tool failed")
+        raise HTTPException(status_code=502, detail=f"meta error: {e}")
