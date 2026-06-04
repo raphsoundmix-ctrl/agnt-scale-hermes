@@ -19,11 +19,11 @@ def get(path: str, params: dict) -> dict:
         ]}
     if p.endswith("/insights"):
         return {"data": [
-            {"campaign_name": "Winner — UGC", "objective": "OUTCOME_SALES", "spend": "812.40",
-             "impressions": "94210", "clicks": "1980", "ctr": "2.10", "cpc": "0.41",
+            {"campaign_id": "23851000001", "campaign_name": "Winner — UGC", "objective": "OUTCOME_SALES",
+             "spend": "812.40", "impressions": "94210", "clicks": "1980", "ctr": "2.10", "cpc": "0.41",
              "actions": [{"action_type": "purchase", "value": "63"}], "purchase_roas": [{"value": "3.20"}]},
-            {"campaign_name": "Cold — Interest Stack", "objective": "OUTCOME_SALES", "spend": "519.80",
-             "impressions": "120300", "clicks": "1110", "ctr": "0.92", "cpc": "0.47",
+            {"campaign_id": "23851000002", "campaign_name": "Cold — Interest Stack", "objective": "OUTCOME_SALES",
+             "spend": "519.80", "impressions": "120300", "clicks": "1110", "ctr": "0.92", "cpc": "0.47",
              "actions": [{"action_type": "purchase", "value": "11"}], "purchase_roas": [{"value": "0.90"}]},
         ]}
     if p.endswith("/campaigns"):

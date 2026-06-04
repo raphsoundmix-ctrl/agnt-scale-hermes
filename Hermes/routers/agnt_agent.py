@@ -26,6 +26,7 @@ from services.meta import tools as meta_tools
 from services.meta import architect as meta_architect
 from services.meta import executor as meta_executor
 from services.meta import watcher as meta_watcher
+from services.meta import optimizer as meta_optimizer
 from agents import AGENTS
 
 router = APIRouter(tags=["agnt"])
@@ -472,3 +473,49 @@ async def meta_learn():
     version = await meta_watcher.check_version()
     learnings = await meta_watcher.recent_learnings(limit=10)
     return {"version": version, "recent_learnings": learnings, "count": len(learnings)}
+
+
+class OptimizeRequest(BaseModel):
+    account_id: Optional[str] = None
+    ad_account_id: str
+    meta_token: Optional[str] = None
+    target_roas: Optional[float] = None
+    target_cpa: Optional[float] = None
+    level: str = "campaign"
+
+
+@router.post("/campaign/optimize")
+async def campaign_optimize(req: OptimizeRequest):
+    """Read insights → Kill/Hold/Scale verdicts → DRY-RUN budget/status proposals.
+    Each proposal is approval-gated; nothing changes until applied with approval."""
+    mock = os.environ.get("META_MOCK", "0").lower() in ("1", "true", "yes")
+    if not req.meta_token and not mock:
+        raise HTTPException(status_code=409, detail="no Meta token (connect Meta for live insights)")
+    try:
+        insights = await meta_tools.get_insights(req.ad_account_id, level=req.level, token=req.meta_token)
+        verdicts = meta_optimizer.evaluate(
+            insights, target_roas=req.target_roas, target_cpa=req.target_cpa,
+        )
+        campaigns = await meta_tools.list_campaigns(req.ad_account_id, token=req.meta_token)
+        budget_by_id = {str(c.get("id")): int(c.get("daily_budget") or 0) for c in campaigns}
+        proposals: list[dict[str, Any]] = []
+        for v in verdicts:
+            cid = v.get("campaign_id")
+            if not cid:
+                continue
+            if v["verdict"] == "KILL":
+                p = await meta_tools.update_status(str(cid), "PAUSED")
+                p["reason"] = v["reason"]
+                proposals.append(p)
+            elif v["verdict"] == "SCALE":
+                cur = budget_by_id.get(str(cid), 0)
+                if cur:
+                    p = await meta_tools.update_budget(str(cid), int(cur * meta_optimizer.SCALE_STEP))
+                    p["reason"] = v["reason"]
+                    proposals.append(p)
+    except Exception as e:  # noqa: BLE001
+        log.exception("optimize failed")
+        await meta_watcher.capture_error(e, context="campaign/optimize")
+        raise HTTPException(status_code=502, detail=f"optimize failed: {e}")
+    return {"verdicts": verdicts, "proposals": proposals, "approval_required": True,
+            "note": "DRY-RUN proposals. Approve each to apply (needs ads_management)."}
