@@ -23,6 +23,7 @@ from pydantic import BaseModel
 from services.llm_router import call_llm
 from services import agnt_memory as mem
 from services.meta import tools as meta_tools
+from services.meta import architect as meta_architect
 from agents import AGENTS
 
 router = APIRouter(tags=["agnt"])
@@ -376,3 +377,44 @@ async def meta(req: MetaReadRequest):
     except Exception as e:  # noqa: BLE001
         log.exception("meta tool failed")
         raise HTTPException(status_code=502, detail=f"meta error: {e}")
+
+
+# ── Campaign Architect: goal → blueprint → DRY-RUN plan (for approval) ─────────
+
+class CampaignPlanRequest(BaseModel):
+    account_id: Optional[str] = None      # workspace id
+    ad_account_id: Optional[str] = None   # Meta act_<id>
+    goal: str
+    budget_cents: Optional[int] = None
+    pixel_id: Optional[str] = None
+    countries: Optional[list[str]] = None
+    niche: Optional[str] = None
+
+
+@router.post("/campaign/plan")
+async def campaign_plan(req: CampaignPlanRequest):
+    """Design a launchable campaign blueprint + the ordered DRY-RUN proposals.
+    Nothing is created — each proposal needs per-action approval to execute."""
+    if not req.goal.strip():
+        raise HTTPException(status_code=400, detail="goal is required")
+    bp = await meta_architect.design_blueprint(
+        req.goal, budget_cents=req.budget_cents, pixel_id=req.pixel_id,
+        countries=req.countries, niche=req.niche,
+    )
+    if "_unparsed" in bp or "objective" not in bp:
+        raise HTTPException(status_code=502, detail="architect could not produce a valid blueprint")
+    plan = await meta_architect.build_dry_run_plan(
+        bp, req.ad_account_id or "{{ad_account_id}}", pixel_id=req.pixel_id,
+    )
+    try:
+        camp_name = bp.get("campaign", {}).get("name", "campaign")
+        await mem.remember(
+            req.account_id or "_global", "ad_setting",
+            f"PLAN [{bp.get('objective')}] '{camp_name}' — {len(plan)} actions. goal: {req.goal[:140]}",
+            kind="plan", scope="long", ad_account_id=req.ad_account_id,
+            meta={"objective": bp.get("objective")},
+        )
+    except Exception:  # noqa: BLE001
+        pass
+    return {"blueprint": bp, "plan": plan, "approval_required": True,
+            "note": "DRY-RUN — nothing created. Approve each action to execute (needs ads_management)."}
