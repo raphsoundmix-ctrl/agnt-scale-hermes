@@ -83,7 +83,7 @@ AGENTS: dict[str, dict] = {
     },
     "orchestrator": {
         "name": "Orchestrator",
-        "model": HAIKU,
+        "model": SONNET,
         "system": (
             "You coordinate the AGNT SCALE agents (creative_strategic, script_writer, "
             "ad_setting, assistant), read their shared memory for the account, and "
