@@ -22,6 +22,7 @@ from pydantic import BaseModel
 
 from services.llm_router import call_llm
 from services import agnt_memory as mem
+from services.mem_maintenance import run_maintenance
 from services.meta import tools as meta_tools
 from services.meta import architect as meta_architect
 from services.meta import executor as meta_executor
@@ -75,6 +76,13 @@ class SearchRequest(BaseModel):
 
 def _strip(prefix: str, c: str) -> str:
     return c[len(prefix):] if c.startswith(prefix) else c
+
+
+def _require_account_id(account_id: Optional[str]) -> str:
+    """Fail-closed: agent memory writes must not fall back to _global."""
+    if not account_id or not str(account_id).strip():
+        raise HTTPException(status_code=400, detail="account_id is required")
+    return str(account_id).strip()
 
 
 def _parse_json(text: str) -> dict:
@@ -225,16 +233,24 @@ async def memory_ping():
     return await mem.ping()
 
 
+@router.post("/memory/maintain")
+async def memory_maintain():
+    """Run agent_memory maintenance (TTL / dedup / cap). Dry-run by default (MEM_MAINT_DRY_RUN=1)."""
+    report = await run_maintenance()
+    return report.to_dict()
+
+
 @router.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
+    account_id = _require_account_id(req.account_id)
     agent = AGENTS.get(req.agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail=f"unknown agent_id: {req.agent_id}")
 
     if req.agent_id == "orchestrator":
         # Cross-agent: semantic-relevant first (RLS exposes ALL agents), then recent.
-        relevant = await mem.search(req.account_id, "orchestrator", req.message, scope="long", limit=8)
-        recent = await mem.recall(req.account_id, "orchestrator", limit=12)
+        relevant = await mem.search(account_id, "orchestrator", req.message, scope="long", limit=8)
+        recent = await mem.recall(account_id, "orchestrator", limit=12)
         seen: set[int] = set()
         notes: list[str] = []
         for h in relevant:
@@ -248,7 +264,7 @@ async def chat(req: ChatRequest):
         system = agent["system"] + "\n\nShared memory across all agents for this account (relevant first):\n" + ctx
         msgs = [{"role": "user", "content": req.message}]
     else:
-        history = await mem.recall(req.account_id, req.agent_id, scope="short", limit=10)
+        history = await mem.recall(account_id, req.agent_id, scope="short", limit=10)
         msgs = []
         for h in reversed(history):
             c = str(h["content"])
@@ -258,7 +274,7 @@ async def chat(req: ChatRequest):
                 msgs.append({"role": "user", "content": _strip("USER: ", c)})
         msgs.append({"role": "user", "content": req.message})
         # Inject this agent's own relevant long-term findings (semantic recall).
-        facts = await mem.search(req.account_id, req.agent_id, req.message, scope="long", limit=4)
+        facts = await mem.search(account_id, req.agent_id, req.message, scope="long", limit=4)
         if facts:
             block = "\n".join(f"- {str(f['content'])[:240]}" for f in facts)
             system = agent["system"] + "\n\nRelevant long-term memory (your prior findings):\n" + block
@@ -272,13 +288,14 @@ async def chat(req: ChatRequest):
         log.exception("llm call failed")
         raise HTTPException(status_code=502, detail=f"LLM error: {e}")
 
-    await mem.remember(req.account_id, req.agent_id, f"USER: {req.message}", kind="msg", scope="short", ad_account_id=req.ad_account_id)
-    await mem.remember(req.account_id, req.agent_id, f"ASSISTANT: {reply}", kind="msg", scope="short", ad_account_id=req.ad_account_id)
+    await mem.remember(account_id, req.agent_id, f"USER: {req.message}", kind="msg", scope="short", ad_account_id=req.ad_account_id)
+    await mem.remember(account_id, req.agent_id, f"ASSISTANT: {reply}", kind="msg", scope="short", ad_account_id=req.ad_account_id)
     return ChatResponse(agent_id=req.agent_id, name=agent["name"], model=agent["model"], reply=reply)
 
 
 @router.post("/run")
 async def run(req: RunRequest):
+    account_id = _require_account_id(req.account_id)
     agent = AGENTS.get(req.agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail=f"unknown agent_id: {req.agent_id}")
@@ -299,7 +316,7 @@ async def run(req: RunRequest):
     # Persist structured result to LONG-TERM memory (orchestrator can recall it).
     try:
         mid = await mem.remember(
-            req.account_id, req.agent_id, json.dumps(result)[:2000],
+            account_id, req.agent_id, json.dumps(result)[:2000],
             kind="result", scope="long", ad_account_id=req.ad_account_id,
             meta={"task": req.agent_id},
         )
@@ -313,13 +330,14 @@ async def run(req: RunRequest):
 @router.post("/note")
 async def note(req: NoteRequest):
     """Write-gate: an agent proposes a durable fact; only worthy notes reach long-term."""
+    account_id = _require_account_id(req.account_id)
     if req.agent_id not in AGENTS:
         raise HTTPException(status_code=404, detail=f"unknown agent_id: {req.agent_id}")
     ok, reason = _worth_long(req.content)
     if not ok:
         return {"stored": False, "reason": reason}
     mid = await mem.remember(
-        req.account_id, req.agent_id, req.content,
+        account_id, req.agent_id, req.content,
         kind="fact", scope="long", ad_account_id=req.ad_account_id, meta={"via": "note"},
     )
     return {"stored": True, "memory_id": mid, "reason": reason}
@@ -401,6 +419,7 @@ async def campaign_plan(req: CampaignPlanRequest):
     Nothing is created — each proposal needs per-action approval to execute."""
     if not req.goal.strip():
         raise HTTPException(status_code=400, detail="goal is required")
+    account_id = _require_account_id(req.account_id)
     bp = await meta_architect.design_blueprint(
         req.goal, budget_cents=req.budget_cents, pixel_id=req.pixel_id,
         countries=req.countries, niche=req.niche,
@@ -413,7 +432,7 @@ async def campaign_plan(req: CampaignPlanRequest):
     try:
         camp_name = bp.get("campaign", {}).get("name", "campaign")
         await mem.remember(
-            req.account_id or "_global", "ad_setting",
+            account_id, "ad_setting",
             f"PLAN [{bp.get('objective')}] '{camp_name}' — {len(plan)} actions. goal: {req.goal[:140]}",
             kind="plan", scope="long", ad_account_id=req.ad_account_id,
             meta={"objective": bp.get("objective")},
@@ -440,6 +459,7 @@ async def campaign_execute(req: CampaignExecuteRequest):
     ads_management. Without write access Meta returns a permission error (surfaced)."""
     if not req.approve:
         raise HTTPException(status_code=400, detail="approval required: set approve=true after reviewing the dry-run plan")
+    account_id = _require_account_id(req.account_id)
     mock = os.environ.get("META_MOCK", "0").lower() in ("1", "true", "yes")
     if not req.meta_token and not mock:
         raise HTTPException(status_code=409, detail="no Meta token (connect Meta; live create needs ads_management)")
@@ -455,7 +475,7 @@ async def campaign_execute(req: CampaignExecuteRequest):
         raise HTTPException(status_code=502, detail=f"execute failed: {e}")
     try:
         await mem.remember(
-            req.account_id or "_global", "ad_setting",
+            account_id, "ad_setting",
             f"EXECUTED [{req.blueprint.get('objective')}] campaign {result.get('campaign_id')} "
             f"+ {len(result.get('adset_ids', []))} ad sets (PAUSED) on {req.ad_account_id}",
             kind="execution", scope="long", ad_account_id=req.ad_account_id,

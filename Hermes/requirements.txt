@@ -39,3 +39,6 @@ boto3==1.35.36
 
 # Env
 python-dotenv==1.0.1
+
+# Scheduled maintenance (#12)
+APScheduler==3.10.4

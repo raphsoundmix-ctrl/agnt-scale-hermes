@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 
 from config import settings
 from routers import health, skills, agnt_agent
+from services.mem_maintenance import run_maintenance
 
 class _CorrelationDefault(logging.Filter):
     """Background tasks (event listener, visual worker) log without a
@@ -44,6 +45,10 @@ ALLOWED_ORIGINS = [o.strip() for o in os.getenv(
 ).split(",") if o.strip()]
 
 
+def _mem_maint_schedule_enabled() -> bool:
+    return os.getenv("MEM_MAINT_SCHEDULE", "0").lower() in ("1", "true", "yes")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info(
@@ -52,7 +57,43 @@ async def lifespan(app: FastAPI):
     )
     logger.info(f"📡 LLM: {settings.OPENROUTER_MODEL}", extra={"correlation_id": "boot"})
 
+    scheduler = None
+    if _mem_maint_schedule_enabled():
+        from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+        hours = int(os.getenv("MEM_MAINT_INTERVAL_HOURS", "24"))
+        scheduler = AsyncIOScheduler()
+
+        async def _mem_maint_tick() -> None:
+            try:
+                report = await run_maintenance()
+                t = report.totals
+                logger.info(
+                    "mem_maint scheduled tick dry_run=%s expires=%d ttl=%d dedup=%d cap=%d deleted=%d",
+                    report.dry_run,
+                    t["expires_would_delete"],
+                    t["ttl_would_delete"],
+                    t["dedup_would_delete"],
+                    t["cap_would_delete"],
+                    t["deleted"],
+                    extra={"correlation_id": "mem_maint"},
+                )
+            except Exception:
+                logger.exception("mem_maint scheduled tick failed", extra={"correlation_id": "mem_maint"})
+
+        scheduler.add_job(_mem_maint_tick, "interval", hours=hours, id="mem_maint")
+        scheduler.start()
+        logger.info(
+            "mem_maint scheduler on (every %dh, dry_run=%s)",
+            hours,
+            os.getenv("MEM_MAINT_DRY_RUN", "1"),
+            extra={"correlation_id": "boot"},
+        )
+
     yield
+
+    if scheduler is not None and scheduler.running:
+        scheduler.shutdown(wait=False)
     logger.info("Hermes Gateway shutting down", extra={"correlation_id": "boot"})
 
 
