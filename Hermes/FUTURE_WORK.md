@@ -13,14 +13,12 @@ Recorded 2026-06-08 by Claude. Two deferred enhancements to the agent layer. Nei
 - Fail-closed `account_id` on agent write paths (`chat` / `run` / `note` / `campaign/plan` / `campaign/execute`) — no silent `_global` fallback.
 - `MEM_DEDUP_EXACT` default `0` (all policies strictly opt-in).
 - Memory cleaned to baseline **14 rows** (`cmq10`=2, `demo`=2, `_global`=10). Deployed @ `fccbdcd`; post-deploy checklist passed.
+- Migration `006_mem_maint_role.sql` — `mem_maint` (`NOLOGIN NOSUPERUSER BYPASSRLS`, SELECT-only) for cross-account bucket listing; per-bucket deletes stay under `mem_app` + RLS. Graceful fallback if role missing. Deployed @ `08bd2cd`.
+- `expires_at` on write in `remember()` — `short` → `now() + MEM_EXPIRES_SHORT_DAYS` (default 7d); `long` → NULL unless `MEM_EXPIRES_LONG_DAYS` set. New rows only, no backfill.
 
 ### PENDING #12
 
 **(a) Enable policies** — turn on TTL/cap/scheduler when memory volume warrants it (14 rows today — premature).
-
-**(b) Migration 006 — `mem_maint` role** — `NOLOGIN NOSUPERUSER BYPASSRLS` for bucket enumeration only; per-bucket deletes stay under `mem_app` + RLS. Replaces listing via superuser `agnt`.
-
-**(c) Populate `expires_at` in `remember()`** — per scope on write (e.g. short=7d, long=90d) so per-record TTL is live, not just the `created_at` backstop.
 
 Still deferred (not in foundation):
 - contradiction resolution (newer fact supersedes older)
