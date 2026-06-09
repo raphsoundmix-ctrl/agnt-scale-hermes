@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 import asyncpg
@@ -33,6 +34,28 @@ async def _get_pool() -> asyncpg.Pool:
     if _pool is None:
         _pool = await asyncpg.create_pool(_dsn(), min_size=1, max_size=5)
     return _pool
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
+def _expires_at_for_scope(scope: str) -> Optional[datetime]:
+    """Per-scope expiry for new rows only. Unknown scope → NULL (never expires)."""
+    if scope == "short":
+        days = _env_int("MEM_EXPIRES_SHORT_DAYS", 7)
+        if days <= 0:
+            return None
+        return datetime.now(timezone.utc) + timedelta(days=days)
+    if scope == "long":
+        days = _env_int("MEM_EXPIRES_LONG_DAYS", 0)
+        if days <= 0:
+            return None
+        return datetime.now(timezone.utc) + timedelta(days=days)
+    return None
 
 
 async def _scope(con: asyncpg.Connection, account_id: str, agent_id: str) -> None:
@@ -60,17 +83,20 @@ async def remember(
         except Exception:  # noqa: BLE001 — embedding is best-effort, never blocks a write
             vec_str = None
 
+    expires_at = _expires_at_for_scope(scope)
+
     pool = await _get_pool()
     async with pool.acquire() as con:
         async with con.transaction():
             await _scope(con, account_id, agent_id)
             row = await con.fetchrow(
                 """INSERT INTO agent_memory
-                     (account_id, ad_account_id, agent_id, scope, kind, content, meta, embedding)
-                   VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::vector)
+                     (account_id, ad_account_id, agent_id, scope, kind, content,
+                      meta, embedding, expires_at)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::vector,$9)
                    RETURNING id""",
                 account_id, ad_account_id, agent_id, scope, kind, content,
-                json.dumps(meta or {}), vec_str,
+                json.dumps(meta or {}), vec_str, expires_at,
             )
             return int(row["id"])
 

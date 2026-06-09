@@ -1,7 +1,8 @@
 """Agent memory maintenance (#12): TTL, exact/cosine dedup, per-agent cap.
 
 Runs under RLS via mem_app per (account_id, agent_id) bucket. Bucket enumeration
-uses the pool owner (agnt, BYPASSRLS) — same connection as agnt_memory, no SET ROLE.
+uses SET ROLE mem_maint (SELECT-only, BYPASSRLS) when migration 006 is applied;
+falls back to pool owner with a WARNING if the role is missing.
 
 Default: DRY-RUN (log only). Destructive deletes require MEM_MAINT_DRY_RUN=0.
 """
@@ -107,11 +108,34 @@ async def _scope(con: asyncpg.Connection, account_id: str, agent_id: str) -> Non
     await con.execute("SELECT set_config('app.agent_id', $1, true)", agent_id)
 
 
+_BUCKET_SQL = "SELECT DISTINCT account_id, agent_id FROM agent_memory ORDER BY 1, 2"
+
+
 async def _list_buckets(con: asyncpg.Connection) -> list[tuple[str, str]]:
-    rows = await con.fetch(
-        "SELECT DISTINCT account_id, agent_id FROM agent_memory ORDER BY 1, 2"
-    )
+    rows = await con.fetch(_BUCKET_SQL)
     return [(r["account_id"], r["agent_id"]) for r in rows]
+
+
+async def _enumerate_buckets(pool: asyncpg.Pool) -> list[tuple[str, str]]:
+    """List all buckets; prefer mem_maint (least privilege), fall back if missing."""
+    async with pool.acquire() as con:
+        role_set = False
+        try:
+            await con.execute("SET ROLE mem_maint")
+            role_set = True
+            return await _list_buckets(con)
+        except Exception as exc:  # noqa: BLE001 — role may not exist pre-migration
+            log.warning(
+                "mem_maint role unavailable (%s); listing buckets as pool owner",
+                exc,
+            )
+            return await _list_buckets(con)
+        finally:
+            if role_set:
+                try:
+                    await con.execute("RESET ROLE")
+                except Exception:  # noqa: BLE001
+                    pass
 
 
 def _ttl_scope_clause(scope_mode: str) -> tuple[str, list[Any]]:
@@ -259,8 +283,7 @@ async def run_maintenance(
     )
 
     pool = await mem._get_pool()  # noqa: SLF001 — shared pool with memory client
-    async with pool.acquire() as con:
-        buckets = await _list_buckets(con)
+    buckets = await _enumerate_buckets(pool)
 
     for account_id, agent_id in buckets:
         if account_id in skip:
