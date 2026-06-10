@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import os
 
-# Defaults (override per agent). OPENROUTER_MODEL env wins as the house model.
-SONNET = os.environ.get("OPENROUTER_MODEL", "anthropic/claude-sonnet-4-6")
-HAIKU = "anthropic/claude-haiku-4-5"
+# Per-agent slugs — use tier env vars (not OPENROUTER_MODEL) so roster stays stable.
+SONNET = os.environ.get("OPENROUTER_MODEL_SONNET", "anthropic/claude-sonnet-4-6")
+HAIKU = os.environ.get("OPENROUTER_MODEL_HAIKU", "anthropic/claude-haiku-4-5")
 
 AGENTS: dict[str, dict] = {
     "creative_strategic": {
