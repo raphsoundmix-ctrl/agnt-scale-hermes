@@ -61,12 +61,12 @@ async def campaign_plan(goal: str, budget_cents: int = 0, countries: Optional[li
 
 @mcp.tool()
 async def campaign_execute(blueprint: dict, ad_account_id: str, meta_token: str = "",
-                           pixel_id: str = "", approve: bool = False) -> dict:
-    """Execute an APPROVED blueprint (creates campaign + ad sets, PAUSED).
+                           pixel_id: str = "", page_id: str = "", approve: bool = False) -> dict:
+    """Execute an APPROVED blueprint (creates campaign + ad sets + optional ads/creatives, PAUSED).
     Requires approve=true and a Meta token with ads_management."""
     return await _post("campaign/execute", {
         "blueprint": blueprint, "ad_account_id": ad_account_id, "meta_token": meta_token or None,
-        "pixel_id": pixel_id or None, "approve": approve,
+        "pixel_id": pixel_id or None, "page_id": page_id or None, "approve": approve,
     })
 
 

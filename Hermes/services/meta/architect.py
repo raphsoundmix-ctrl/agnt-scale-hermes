@@ -115,4 +115,28 @@ async def build_dry_run_plan(blueprint: dict, ad_account_id: str, *,
         proposal["resolve"] = {"interests": tg.get("interests", []), "adset_index": idx}
         plan.append(proposal)
 
+    page_id = blueprint.get("page_id")
+    for ad in blueprint.get("ads") or []:
+        spec = t.normalize_ad_spec(ad)
+        media = spec.get("media_ref") or {}
+        mtype = str(media.get("type") or "image_url").lower()
+        if mtype == "image_url" and media.get("value"):
+            plan.append(await t.upload_ad_image(ad_account_id, image_url=str(media["value"])))
+        elif mtype == "video_url" and media.get("value"):
+            plan.append(await t.upload_ad_video(ad_account_id, file_url=str(media["value"])))
+        plan.append(await t.create_ad_creative(
+            ad_account_id,
+            name=f"{spec['name']} creative",
+            page_id=str(page_id or "{{page_id}}"),
+            message=spec["primary_text"] or "(copy)",
+            link=spec["link"] or "https://example.com",
+            headline=spec.get("headline"),
+            image_hash=media.get("value") if mtype == "image_hash" else None,
+            video_id=media.get("value") if mtype == "video_id" else None,
+            cta=spec.get("cta", "LEARN_MORE"),
+        ))
+        plan.append(await t.create_ad(
+            ad_account_id, spec["name"], "{{adset_id}}", "{{creative_id}}",
+        ))
+
     return plan

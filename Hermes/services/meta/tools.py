@@ -73,6 +73,54 @@ async def search_interests(query: str, *, token: Optional[str] = None) -> list[d
     return r.get("data", [])
 
 
+def normalize_ad_spec(ad: dict) -> dict:
+    """Flatten blueprint ad / creative block into executor fields."""
+    creative = ad.get("creative") if isinstance(ad.get("creative"), dict) else {}
+    media_ref = creative.get("media_ref") or ad.get("media_ref")
+    return {
+        "name": ad.get("name") or "AGNT Ad",
+        "adset_index": int(ad.get("adset_index", 0)),
+        "primary_text": creative.get("primary_text") or ad.get("primary_text") or "",
+        "headline": creative.get("headline") or ad.get("headline"),
+        "cta": creative.get("cta") or ad.get("cta") or "LEARN_MORE",
+        "link": creative.get("link") or ad.get("link") or "",
+        "media_ref": media_ref,
+    }
+
+
+def extract_image_hash(response: dict) -> str:
+    images = response.get("images") or {}
+    if isinstance(images, dict):
+        for entry in images.values():
+            if isinstance(entry, dict) and entry.get("hash"):
+                return str(entry["hash"])
+    if response.get("hash"):
+        return str(response["hash"])
+    raise ValueError("Meta adimages response missing hash")
+
+
+async def upload_ad_image(account_id: str, *, image_url: Optional[str] = None,
+                          dry_run: bool = True, token: Optional[str] = None) -> dict:
+    if not image_url:
+        raise ValueError("image_url is required")
+    endpoint = f"{_act(account_id)}/adimages"
+    payload = {"url": image_url}
+    if dry_run:
+        return _proposed("upload_ad_image", endpoint, payload, f"Upload image from {image_url}")
+    return await graph_post(endpoint, token=token, data=payload)
+
+
+async def upload_ad_video(account_id: str, *, file_url: Optional[str] = None,
+                          dry_run: bool = True, token: Optional[str] = None) -> dict:
+    if not file_url:
+        raise ValueError("file_url is required")
+    endpoint = f"{_act(account_id)}/advideos"
+    payload = {"file_url": file_url}
+    if dry_run:
+        return _proposed("upload_ad_video", endpoint, payload, f"Upload video from {file_url}")
+    return await graph_post(endpoint, token=token, data=payload)
+
+
 # ── TARGETING ─────────────────────────────────────────────────────────────────
 
 def build_targeting(*, countries: Optional[list[str]] = None, age_min: int = 18, age_max: int = 65,

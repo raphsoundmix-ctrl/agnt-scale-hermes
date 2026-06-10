@@ -52,5 +52,22 @@ def get(path: str, params: dict) -> dict:
 
 
 def post(path: str, data: dict) -> dict:
-    # Live writes are mocked as success with a synthetic id (dry-run never reaches here).
-    return {"id": "MOCK_" + path.strip("/").replace("/", "_").upper(), "_mock_echo": data}
+    """Live writes mocked as success with synthetic ids (dry-run never reaches here)."""
+    import hashlib
+    import json
+
+    p = path.lstrip("/")
+    tag = hashlib.md5(json.dumps(data or {}, sort_keys=True, default=str).encode()).hexdigest()[:8]
+    if p.endswith("/adimages"):
+        return {"images": {"bytes": {"hash": f"MOCK_HASH_{tag}"}}, "_mock_echo": data}
+    if p.endswith("/advideos"):
+        return {"id": f"MOCK_VIDEO_{tag}", "_mock_echo": data}
+    if p.endswith("/adcreatives"):
+        return {"id": f"MOCK_CREATIVE_{tag}", "_mock_echo": data}
+    if p.endswith("/ads"):
+        return {"id": f"MOCK_AD_{tag}", "_mock_echo": data}
+    if p.endswith("/campaigns"):
+        return {"id": f"MOCK_CAMPAIGN_{tag}", "_mock_echo": data}
+    if p.endswith("/adsets"):
+        return {"id": f"MOCK_ADSET_{tag}", "_mock_echo": data}
+    return {"id": "MOCK_" + p.strip("/").replace("/", "_").upper(), "_mock_echo": data}

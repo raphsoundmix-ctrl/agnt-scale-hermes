@@ -564,6 +564,7 @@ class CampaignExecuteRequest(BaseModel):
     meta_token: Optional[str] = None
     blueprint: dict[str, Any]
     pixel_id: Optional[str] = None
+    page_id: Optional[str] = None  # Facebook Page for ad creatives (or blueprint.page_id)
     approve: bool = False
 
 
@@ -582,17 +583,19 @@ async def campaign_execute(req: CampaignExecuteRequest):
         raise HTTPException(status_code=400, detail="blueprint missing objective")
     try:
         result = await meta_executor.execute_plan(
-            req.blueprint, req.ad_account_id, req.meta_token, pixel_id=req.pixel_id,
+            req.blueprint, req.ad_account_id, req.meta_token,
+            pixel_id=req.pixel_id, page_id=req.page_id,
         )
     except Exception as e:  # noqa: BLE001
         log.exception("campaign execute failed")
         await meta_watcher.capture_error(e, context="campaign/execute")
         raise HTTPException(status_code=502, detail=f"execute failed: {e}")
     try:
+        ad_note = f", {len(result.get('ad_ids', []))} ads" if result.get("ad_ids") else ""
         await mem.remember(
             account_id, "ad_setting",
             f"EXECUTED [{req.blueprint.get('objective')}] campaign {result.get('campaign_id')} "
-            f"+ {len(result.get('adset_ids', []))} ad sets (PAUSED) on {req.ad_account_id}",
+            f"+ {len(result.get('adset_ids', []))} ad sets{ad_note} (PAUSED) on {req.ad_account_id}",
             kind="execution", scope="long", ad_account_id=req.ad_account_id,
             meta={"campaign_id": result.get("campaign_id")},
         )

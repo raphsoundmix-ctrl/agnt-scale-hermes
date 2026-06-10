@@ -4,14 +4,25 @@
 tools for Claude Code / any MCP client. Heavy logic + memory + tokens stay on the Hermes
 server; this is a stdio bridge.
 
+## Security / transport
+
+| Property | Value |
+|----------|-------|
+| **Transport** | **stdio** (`mcp.run()`) — no listening TCP port on the MCP process |
+| **Upstream** | HTTP client → Hermes `HERMES_URL` (default `http://localhost:7778`) |
+| **Auth to Hermes** | `X-Internal-Token: $HERMES_INTERNAL_TOKEN` on every POST |
+| **Workspace scope** | `META_WORKSPACE` injected as `account_id` on all calls |
+| **Consumers** | External MCP clients (Claude Code / Cursor MCP config) — **not** wired into Hermes orchestrator |
+| **Port exposure** | MCP itself exposes **no port**. Hermes listens on AGNT **7778** (see `ISOLATION.md`); Funnel :8443 is token-gated |
+
 ## Tools
-| Tool | Does |
-|------|------|
-| `meta_read` | accounts / insights / campaigns / adsets / ads / pixels / interests |
-| `campaign_plan` | goal → blueprint + DRY-RUN plan (nothing created) |
-| `campaign_execute` | approved blueprint → create campaign + ad sets (PAUSED) |
-| `campaign_optimize` | insights → Kill/Hold/Scale → DRY-RUN proposals |
-| `meta_learn` | API version check + recent platform learnings |
+| Tool | Hermes endpoint | Does |
+|------|-----------------|------|
+| `meta_read` | `POST /agent/meta` | accounts / insights / campaigns / adsets / ads / pixels / interests |
+| `campaign_plan` | `POST /agent/campaign/plan` | goal → blueprint + DRY-RUN plan |
+| `campaign_execute` | `POST /agent/campaign/execute` | approved blueprint → campaign + ad sets + optional ads/creatives (PAUSED) |
+| `campaign_optimize` | `POST /agent/campaign/optimize` | insights → Kill/Hold/Scale → DRY-RUN proposals |
+| `meta_learn` | `POST /agent/meta/learn` | API version check + platform learnings |
 
 ## Use in Claude Code
 
