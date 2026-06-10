@@ -23,6 +23,9 @@ from services import embeddings as emb_svc
 
 _pool: Optional[asyncpg.Pool] = None
 
+PLATFORM_ACCOUNT = "_global"
+PLATFORM_AGENT = "_platform"
+
 
 def _dsn() -> str:
     # asyncpg wants a plain postgresql:// DSN (strip SQLAlchemy's +asyncpg).
@@ -63,6 +66,16 @@ async def _scope(con: asyncpg.Connection, account_id: str, agent_id: str) -> Non
     await con.execute("SET LOCAL ROLE mem_app")
     await con.execute("SELECT set_config('app.account_id', $1, true)", account_id)
     await con.execute("SELECT set_config('app.agent_id', $1, true)", agent_id)
+
+
+def _ad_account_filter(agent_id: str, ad_account_id: Optional[str], args: list[Any]) -> str:
+    """Orchestrator reads all cabinets; specialists see workspace NULL + their cabinet."""
+    if agent_id == "orchestrator":
+        return ""
+    if ad_account_id:
+        args.append(ad_account_id)
+        return f" AND (ad_account_id IS NULL OR ad_account_id = ${len(args)})"
+    return " AND ad_account_id IS NULL"
 
 
 async def remember(
@@ -107,6 +120,7 @@ async def recall(
     *,
     scope: Optional[str] = None,
     kind: Optional[str] = None,
+    ad_account_id: Optional[str] = None,
     limit: int = 20,
 ) -> list[dict[str, Any]]:
     """Recency recall (ORDER BY created_at DESC)."""
@@ -117,6 +131,7 @@ async def recall(
             q = ("SELECT id, account_id, ad_account_id, agent_id, scope, kind, "
                  "content, meta, created_at FROM agent_memory WHERE TRUE")
             args: list[Any] = []
+            q += _ad_account_filter(agent_id, ad_account_id, args)
             if scope:
                 args.append(scope); q += f" AND scope = ${len(args)}"
             if kind:
@@ -133,13 +148,14 @@ async def search(
     *,
     scope: str = "long",
     kind: Optional[str] = None,
+    ad_account_id: Optional[str] = None,
     limit: int = 8,
 ) -> list[dict[str, Any]]:
     """Semantic recall: cosine nearest-neighbour over embeddings, RLS-scoped.
 
     For agent_id='orchestrator' RLS exposes ALL agents' rows in the account, so
     the orchestrator searches the whole account's long-term memory; a normal agent
-    only searches its own.
+    only searches its own. ad_account_id narrows specialists to cabinet + workspace rows.
     """
     vec_str = emb_svc.to_pgvector(await emb_svc.aembed(query))
     if not vec_str:
@@ -148,15 +164,27 @@ async def search(
     async with pool.acquire() as con:
         async with con.transaction():
             await _scope(con, account_id, agent_id)
-            q = ("SELECT id, agent_id, kind, content, created_at, "
+            q = ("SELECT id, agent_id, ad_account_id, kind, content, created_at, "
                  "1 - (embedding <=> $1::vector) AS score "
                  "FROM agent_memory WHERE scope = $2 AND embedding IS NOT NULL")
             args: list[Any] = [vec_str, scope]
+            q += _ad_account_filter(agent_id, ad_account_id, args)
             if kind:
                 args.append(kind); q += f" AND kind = ${len(args)}"
             args.append(limit); q += f" ORDER BY embedding <=> $1::vector LIMIT ${len(args)}"
             rows = await con.fetch(q, *args)
             return [dict(r) for r in rows]
+
+
+async def search_platform_knowledge(
+    query: str,
+    *,
+    limit: int = 3,
+) -> list[dict[str, Any]]:
+    """Read-only retrieval from reserved platform knowledge (_global/_platform)."""
+    return await search(
+        PLATFORM_ACCOUNT, PLATFORM_AGENT, query, scope="long", limit=limit,
+    )
 
 
 async def ping() -> dict[str, Any]:

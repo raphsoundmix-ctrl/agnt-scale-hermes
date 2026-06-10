@@ -64,11 +64,12 @@ def _build_input(goal: str, *, budget_cents: Optional[int], pixel_id: Optional[s
 
 async def design_blueprint(goal: str, *, budget_cents: Optional[int] = None,
                            pixel_id: Optional[str] = None, countries: Optional[list[str]] = None,
-                           niche: Optional[str] = None, model: Optional[str] = None) -> dict:
+                           niche: Optional[str] = None, model: Optional[str] = None,
+                           system_suffix: Optional[str] = None) -> dict:
     user = _build_input(goal, budget_cents=budget_cents, pixel_id=pixel_id,
                         countries=countries, niche=niche)
     resp = await call_llm([{"role": "user", "content": user}], system=ARCHITECT_SYSTEM,
-                          complexity="medium", max_tokens=1400)
+                          system_suffix=system_suffix, complexity="medium", max_tokens=1400)
     raw = resp["choices"][0]["message"]["content"]
     bp = _parse_json(raw)
     # Light normalization / guardrails.

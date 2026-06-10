@@ -28,6 +28,7 @@ from services.meta import architect as meta_architect
 from services.meta import executor as meta_executor
 from services.meta import watcher as meta_watcher
 from services.meta import optimizer as meta_optimizer
+from services.meta.optimize_contract import format_proposal
 from agents import AGENTS
 
 router = APIRouter(tags=["agnt"])
@@ -70,6 +71,7 @@ class SearchRequest(BaseModel):
     agent_id: str
     query: str
     limit: int = 8
+    ad_account_id: Optional[str] = None
 
 
 # ───────────────────────── helpers ─────────────────────────
@@ -83,6 +85,19 @@ def _require_account_id(account_id: Optional[str]) -> str:
     if not account_id or not str(account_id).strip():
         raise HTTPException(status_code=400, detail="account_id is required")
     return str(account_id).strip()
+
+
+async def _platform_knowledge_suffix(query: str) -> Optional[str]:
+    """Read-only retrieval from reserved _global/_platform memory (top-3 cosine)."""
+    try:
+        rows = await mem.search_platform_knowledge(query, limit=3)
+    except Exception:  # noqa: BLE001
+        log.exception("platform knowledge search failed")
+        return None
+    if not rows:
+        return None
+    block = "\n".join(f"- {str(r['content'])[:280]}" for r in rows)
+    return "\n\n[platform knowledge]\n" + block
 
 
 def _parse_json(text: str) -> dict:
@@ -249,8 +264,13 @@ async def chat(req: ChatRequest):
 
     if req.agent_id == "orchestrator":
         # Cross-agent: semantic-relevant first (RLS exposes ALL agents), then recent.
-        relevant = await mem.search(account_id, "orchestrator", req.message, scope="long", limit=8)
-        recent = await mem.recall(account_id, "orchestrator", limit=12)
+        relevant = await mem.search(
+            account_id, "orchestrator", req.message, scope="long", limit=8,
+            ad_account_id=req.ad_account_id,
+        )
+        recent = await mem.recall(
+            account_id, "orchestrator", limit=12, ad_account_id=req.ad_account_id,
+        )
         seen: set[int] = set()
         notes: list[str] = []
         for h in relevant:
@@ -264,9 +284,14 @@ async def chat(req: ChatRequest):
         system_suffix = (
             "\n\nShared memory across all agents for this account (relevant first):\n" + ctx
         )
+        platform = await _platform_knowledge_suffix(req.message)
+        if platform:
+            system_suffix += platform
         msgs = [{"role": "user", "content": req.message}]
     else:
-        history = await mem.recall(account_id, req.agent_id, scope="short", limit=10)
+        history = await mem.recall(
+            account_id, req.agent_id, scope="short", limit=10, ad_account_id=req.ad_account_id,
+        )
         msgs = []
         for h in reversed(history):
             c = str(h["content"])
@@ -276,13 +301,19 @@ async def chat(req: ChatRequest):
                 msgs.append({"role": "user", "content": _strip("USER: ", c)})
         msgs.append({"role": "user", "content": req.message})
         # Inject this agent's own relevant long-term findings (semantic recall).
-        facts = await mem.search(account_id, req.agent_id, req.message, scope="long", limit=4)
+        facts = await mem.search(
+            account_id, req.agent_id, req.message, scope="long", limit=4,
+            ad_account_id=req.ad_account_id,
+        )
         system_suffix = None
         if facts:
             block = "\n".join(f"- {str(f['content'])[:240]}" for f in facts)
             system_suffix = (
                 "\n\nRelevant long-term memory (your prior findings):\n" + block
             )
+        platform = await _platform_knowledge_suffix(req.message)
+        if platform:
+            system_suffix = (system_suffix or "") + platform
 
     try:
         resp = await call_llm(
@@ -357,7 +388,10 @@ async def memory_search(req: SearchRequest):
     """Semantic recall probe. orchestrator → searches all agents in the account."""
     if req.agent_id not in AGENTS:
         raise HTTPException(status_code=404, detail=f"unknown agent_id: {req.agent_id}")
-    rows = await mem.search(req.account_id, req.agent_id, req.query, scope="long", limit=req.limit)
+    rows = await mem.search(
+        req.account_id, req.agent_id, req.query, scope="long", limit=req.limit,
+        ad_account_id=req.ad_account_id,
+    )
     return {"results": [
         {"id": r["id"], "agent_id": r["agent_id"], "kind": r["kind"],
          "score": round(float(r["score"]), 3), "content": str(r["content"])[:220]}
@@ -429,9 +463,10 @@ async def campaign_plan(req: CampaignPlanRequest):
     if not req.goal.strip():
         raise HTTPException(status_code=400, detail="goal is required")
     account_id = _require_account_id(req.account_id)
+    platform_suffix = await _platform_knowledge_suffix(req.goal)
     bp = await meta_architect.design_blueprint(
         req.goal, budget_cents=req.budget_cents, pixel_id=req.pixel_id,
-        countries=req.countries, niche=req.niche,
+        countries=req.countries, niche=req.niche, system_suffix=platform_suffix,
     )
     if "_unparsed" in bp or "objective" not in bp:
         raise HTTPException(status_code=502, detail="architect could not produce a valid blueprint")
@@ -515,8 +550,10 @@ class OptimizeRequest(BaseModel):
 
 @router.post("/campaign/optimize")
 async def campaign_optimize(req: OptimizeRequest):
-    """Read insights → Kill/Hold/Scale verdicts → DRY-RUN budget/status proposals.
-    Each proposal is approval-gated; nothing changes until applied with approval."""
+    """Read insights → Kill/Hold/Scale verdicts → DRY-RUN proposals for the app UI."""
+    _require_account_id(req.account_id)
+    if not req.ad_account_id or not str(req.ad_account_id).strip():
+        raise HTTPException(status_code=400, detail="ad_account_id is required")
     mock = os.environ.get("META_MOCK", "0").lower() in ("1", "true", "yes")
     if not req.meta_token and not mock:
         raise HTTPException(status_code=409, detail="no Meta token (connect Meta for live insights)")
@@ -534,17 +571,14 @@ async def campaign_optimize(req: OptimizeRequest):
                 continue
             if v["verdict"] == "KILL":
                 p = await meta_tools.update_status(str(cid), "PAUSED")
-                p["reason"] = v["reason"]
-                proposals.append(p)
+                proposals.append(format_proposal(v, p))
             elif v["verdict"] == "SCALE":
                 cur = budget_by_id.get(str(cid), 0)
                 if cur:
                     p = await meta_tools.update_budget(str(cid), int(cur * meta_optimizer.SCALE_STEP))
-                    p["reason"] = v["reason"]
-                    proposals.append(p)
+                    proposals.append(format_proposal(v, p))
     except Exception as e:  # noqa: BLE001
         log.exception("optimize failed")
         await meta_watcher.capture_error(e, context="campaign/optimize")
         raise HTTPException(status_code=502, detail=f"optimize failed: {e}")
-    return {"verdicts": verdicts, "proposals": proposals, "approval_required": True,
-            "note": "DRY-RUN proposals. Approve each to apply (needs ads_management)."}
+    return {"proposals": proposals}
