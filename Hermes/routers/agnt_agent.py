@@ -22,6 +22,12 @@ from pydantic import BaseModel
 
 from services.llm_router import call_llm
 from services import agnt_memory as mem
+from services.business_context import (
+    BusinessProfile,
+    enrich_task_input,
+    format_business_context_suffix,
+    merge_system_suffix,
+)
 from services.mem_maintenance import run_maintenance
 from services.meta import tools as meta_tools
 from services.meta import architect as meta_architect
@@ -42,6 +48,7 @@ class ChatRequest(BaseModel):
     agent_id: str
     message: str
     ad_account_id: Optional[str] = None
+    business_profile: Optional[BusinessProfile] = None
 
 
 class ChatResponse(BaseModel):
@@ -57,6 +64,7 @@ class RunRequest(BaseModel):
     agent_id: str
     input: dict[str, Any]
     ad_account_id: Optional[str] = None
+    business_profile: Optional[BusinessProfile] = None
 
 
 class NoteRequest(BaseModel):
@@ -114,8 +122,21 @@ def _parse_json(text: str) -> dict:
         return {"_unparsed": text[:1500]}
 
 
-async def _llm_json(system: str, user: str, model: str, max_tokens: int = 1200) -> dict:
-    resp = await call_llm([{"role": "user", "content": user}], system=system, model=model, max_tokens=max_tokens)
+async def _llm_json(
+    system: str,
+    user: str,
+    model: str,
+    max_tokens: int = 1200,
+    *,
+    system_suffix: Optional[str] = None,
+) -> dict:
+    resp = await call_llm(
+        [{"role": "user", "content": user}],
+        system=system,
+        system_suffix=system_suffix,
+        model=model,
+        max_tokens=max_tokens,
+    )
     try:
         raw = resp["choices"][0]["message"]["content"]
     except Exception:  # noqa: BLE001
@@ -285,8 +306,11 @@ async def chat(req: ChatRequest):
             "\n\nShared memory across all agents for this account (relevant first):\n" + ctx
         )
         platform = await _platform_knowledge_suffix(req.message)
-        if platform:
-            system_suffix += platform
+        system_suffix = merge_system_suffix(
+            system_suffix,
+            platform,
+            format_business_context_suffix(req.business_profile),
+        )
         msgs = [{"role": "user", "content": req.message}]
     else:
         history = await mem.recall(
@@ -312,8 +336,11 @@ async def chat(req: ChatRequest):
                 "\n\nRelevant long-term memory (your prior findings):\n" + block
             )
         platform = await _platform_knowledge_suffix(req.message)
-        if platform:
-            system_suffix = (system_suffix or "") + platform
+        system_suffix = merge_system_suffix(
+            system_suffix,
+            platform,
+            format_business_context_suffix(req.business_profile),
+        )
 
     try:
         resp = await call_llm(
@@ -343,8 +370,12 @@ async def run(req: RunRequest):
     if not spec:
         raise HTTPException(status_code=400, detail=f"agent {req.agent_id} has no structured task (use /chat)")
 
-    user = spec["build"](req.input)
-    result = await _llm_json(spec["system"], user, agent["model"], max_tokens=spec["max_tokens"])
+    user = spec["build"](enrich_task_input(req.agent_id, req.input, req.business_profile))
+    biz_suffix = format_business_context_suffix(req.business_profile)
+    result = await _llm_json(
+        spec["system"], user, agent["model"], max_tokens=spec["max_tokens"],
+        system_suffix=biz_suffix,
+    )
 
     # Script Writer: run the humanize pass over the generated copy.
     if req.agent_id == "script_writer" and "_unparsed" not in result:
@@ -454,6 +485,7 @@ class CampaignPlanRequest(BaseModel):
     pixel_id: Optional[str] = None
     countries: Optional[list[str]] = None
     niche: Optional[str] = None
+    business_profile: Optional[BusinessProfile] = None
 
 
 @router.post("/campaign/plan")
@@ -464,9 +496,13 @@ async def campaign_plan(req: CampaignPlanRequest):
         raise HTTPException(status_code=400, detail="goal is required")
     account_id = _require_account_id(req.account_id)
     platform_suffix = await _platform_knowledge_suffix(req.goal)
+    system_suffix = merge_system_suffix(
+        format_business_context_suffix(req.business_profile),
+        platform_suffix,
+    )
     bp = await meta_architect.design_blueprint(
         req.goal, budget_cents=req.budget_cents, pixel_id=req.pixel_id,
-        countries=req.countries, niche=req.niche, system_suffix=platform_suffix,
+        countries=req.countries, niche=req.niche, system_suffix=system_suffix,
     )
     if "_unparsed" in bp or "objective" not in bp:
         raise HTTPException(status_code=502, detail="architect could not produce a valid blueprint")
