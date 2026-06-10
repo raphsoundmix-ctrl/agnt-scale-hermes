@@ -14,11 +14,11 @@ class Settings(BaseSettings):
     OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
     # Default model — Claude Haiku (быстрый + дешёвый). Перекрывается через
     # llm_router.pick_model(complexity) когда задача сложнее.
-    OPENROUTER_MODEL: str = "anthropic/claude-haiku-4-5"
+    OPENROUTER_MODEL: str = "anthropic/claude-sonnet-4-6"
 
     # ── Model tiers — llm_router выбирает по complexity ───────────
     OPENROUTER_MODEL_HAIKU: str = "anthropic/claude-haiku-4-5"
-    OPENROUTER_MODEL_SONNET: str = "anthropic/claude-sonnet-4-5"
+    OPENROUTER_MODEL_SONNET: str = "anthropic/claude-sonnet-4-6"
     OPENROUTER_MODEL_OPUS: str = "anthropic/claude-opus-4-7"
     # Fallback не-Anthropic — если OpenRouter временно недоступен для Claude
     OPENROUTER_MODEL_FALLBACK: str = "nousresearch/hermes-3-llama-3.1-70b"

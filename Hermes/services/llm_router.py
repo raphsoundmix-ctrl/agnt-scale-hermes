@@ -132,6 +132,43 @@ def _auto_pick(text: str) -> str:
     return settings.OPENROUTER_MODEL_HAIKU
 
 
+def _is_anthropic(model: str) -> bool:
+    m = model.lower()
+    return m.startswith("anthropic/") or "claude" in m
+
+
+def _system_message(
+    static: str,
+    model: str,
+    *,
+    suffix: Optional[str] = None,
+) -> dict[str, Any]:
+    """Build system message; Anthropic static block gets ephemeral cache_control."""
+    if not _is_anthropic(model):
+        return {"role": "system", "content": static + (suffix or "")}
+
+    blocks: list[dict[str, Any]] = [
+        {
+            "type": "text",
+            "text": static,
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+    if suffix:
+        blocks.append({"type": "text", "text": suffix})
+    return {"role": "system", "content": blocks}
+
+
+def cache_usage(resp: dict) -> dict[str, int]:
+    """Extract prompt-cache metrics from an OpenRouter response."""
+    usage = resp.get("usage") or {}
+    details = usage.get("prompt_tokens_details") or {}
+    return {
+        "cached_tokens": int(details.get("cached_tokens") or 0),
+        "cache_write_tokens": int(details.get("cache_write_tokens") or 0),
+    }
+
+
 def model_label(slug: str) -> str:
     """Pretty label для UI / логов («Haiku» вместо «anthropic/claude-haiku-4-5»)."""
     if "haiku" in slug:
@@ -190,6 +227,7 @@ async def call_llm(
     complexity: str = "medium",
     model: Optional[str] = None,
     system: Optional[str] = None,
+    system_suffix: Optional[str] = None,
     **kw: Any,
 ) -> dict:
     """
@@ -199,16 +237,20 @@ async def call_llm(
         messages: list of {role, content} dicts.
         complexity: "simple" | "medium" | "complex" | "auto" — picked via pick_model.
         model: explicit OpenRouter slug; overrides `complexity` when provided.
-        system: optional system prompt prepended to messages.
+        system: static system prompt (Anthropic: cached with cache_control ephemeral).
+        system_suffix: dynamic per-request system tail (never cached).
         **kw: forwarded to the request body (max_tokens, temperature,
               response_format, tools, tool_choice, timeout, …).
 
     On primary model failure, falls back to OPENROUTER_MODEL_FALLBACK
     (if set and distinct). Re-raises the last error if fallback also fails.
     """
-    if system:
-        messages = [{"role": "system", "content": system}, *messages]
     chosen = model or pick_model(complexity)  # type: ignore[arg-type]
+    if system:
+        messages = [
+            _system_message(system, chosen, suffix=system_suffix),
+            *messages,
+        ]
     try:
         return await _post_openrouter(chosen, messages, **kw)
     except Exception as e:

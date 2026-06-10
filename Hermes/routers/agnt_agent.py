@@ -261,7 +261,9 @@ async def chat(req: ChatRequest):
                 continue
             notes.append(f"[{h['agent_id']}] {str(h['content'])[:200]}")
         ctx = "\n".join(notes) if notes else "(no agent memory yet for this account)"
-        system = agent["system"] + "\n\nShared memory across all agents for this account (relevant first):\n" + ctx
+        system_suffix = (
+            "\n\nShared memory across all agents for this account (relevant first):\n" + ctx
+        )
         msgs = [{"role": "user", "content": req.message}]
     else:
         history = await mem.recall(account_id, req.agent_id, scope="short", limit=10)
@@ -275,14 +277,21 @@ async def chat(req: ChatRequest):
         msgs.append({"role": "user", "content": req.message})
         # Inject this agent's own relevant long-term findings (semantic recall).
         facts = await mem.search(account_id, req.agent_id, req.message, scope="long", limit=4)
+        system_suffix = None
         if facts:
             block = "\n".join(f"- {str(f['content'])[:240]}" for f in facts)
-            system = agent["system"] + "\n\nRelevant long-term memory (your prior findings):\n" + block
-        else:
-            system = agent["system"]
+            system_suffix = (
+                "\n\nRelevant long-term memory (your prior findings):\n" + block
+            )
 
     try:
-        resp = await call_llm(msgs, system=system, model=agent["model"], max_tokens=800)
+        resp = await call_llm(
+            msgs,
+            system=agent["system"],
+            system_suffix=system_suffix,
+            model=agent["model"],
+            max_tokens=800,
+        )
         reply = resp["choices"][0]["message"]["content"]
     except Exception as e:  # noqa: BLE001
         log.exception("llm call failed")
