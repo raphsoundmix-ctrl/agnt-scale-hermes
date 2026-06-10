@@ -26,6 +26,7 @@ from services.business_context import (
     BusinessProfile,
     enrich_task_input,
     format_business_context_suffix,
+    format_locale_suffix,
     merge_system_suffix,
 )
 from services.mem_maintenance import run_maintenance
@@ -34,7 +35,7 @@ from services.meta import architect as meta_architect
 from services.meta import executor as meta_executor
 from services.meta import watcher as meta_watcher
 from services.meta import optimizer as meta_optimizer
-from services.meta.optimize_contract import format_proposal
+from services.meta.optimize_contract import format_proposal, kill_apply, scale_apply
 from agents import AGENTS
 
 router = APIRouter(tags=["agnt"])
@@ -49,6 +50,7 @@ class ChatRequest(BaseModel):
     message: str
     ad_account_id: Optional[str] = None
     business_profile: Optional[BusinessProfile] = None
+    locale: Optional[str] = None
 
 
 class ChatResponse(BaseModel):
@@ -65,6 +67,7 @@ class RunRequest(BaseModel):
     input: dict[str, Any]
     ad_account_id: Optional[str] = None
     business_profile: Optional[BusinessProfile] = None
+    locale: Optional[str] = None
 
 
 class NoteRequest(BaseModel):
@@ -310,6 +313,7 @@ async def chat(req: ChatRequest):
             system_suffix,
             platform,
             format_business_context_suffix(req.business_profile),
+            format_locale_suffix(req.locale),
         )
         msgs = [{"role": "user", "content": req.message}]
     else:
@@ -340,6 +344,7 @@ async def chat(req: ChatRequest):
             system_suffix,
             platform,
             format_business_context_suffix(req.business_profile),
+            format_locale_suffix(req.locale),
         )
 
     try:
@@ -371,7 +376,10 @@ async def run(req: RunRequest):
         raise HTTPException(status_code=400, detail=f"agent {req.agent_id} has no structured task (use /chat)")
 
     user = spec["build"](enrich_task_input(req.agent_id, req.input, req.business_profile))
-    biz_suffix = format_business_context_suffix(req.business_profile)
+    biz_suffix = merge_system_suffix(
+        format_business_context_suffix(req.business_profile),
+        format_locale_suffix(req.locale),
+    )
     result = await _llm_json(
         spec["system"], user, agent["model"], max_tokens=spec["max_tokens"],
         system_suffix=biz_suffix,
@@ -438,6 +446,19 @@ class MetaReadRequest(BaseModel):
     ad_account_id: Optional[str] = None    # Meta act_<id> (for account-scoped tools)
     meta_token: Optional[str] = None       # decrypted workspace Meta token
     args: dict[str, Any] = {}
+    # App may spread apply.params verbatim at the top level:
+    campaign_id: Optional[str] = None
+    status: Optional[str] = None
+    daily_budget: Optional[int] = None
+
+
+def _meta_args(req: MetaReadRequest) -> dict[str, Any]:
+    args = dict(req.args)
+    for key in ("campaign_id", "status", "daily_budget"):
+        val = getattr(req, key, None)
+        if val is not None and key not in args:
+            args[key] = val
+    return args
 
 
 _META_READ = {
@@ -448,26 +469,38 @@ _META_READ = {
     "list_ads": meta_tools.list_ads,
     "list_pixels": meta_tools.list_pixels,
     "search_interests": meta_tools.search_interests,
+    "update_status": meta_tools.update_status,
+    "update_budget": meta_tools.update_budget,
 }
 
 
 @router.post("/meta")
 async def meta(req: MetaReadRequest):
-    """Read-only Meta Ads tools. Uses the workspace's own token (reused OAuth
-    connection). Write tools stay dry-run + approval-gated elsewhere."""
+    """Meta Ads tools (read + approved writes). Uses the workspace token."""
     fn = _META_READ.get(req.tool)
     if not fn:
         raise HTTPException(status_code=400, detail=f"unsupported meta tool: {req.tool}")
     if not req.meta_token and os.environ.get("META_MOCK", "0").lower() not in ("1", "true", "yes"):
         raise HTTPException(status_code=409, detail="no active Meta connection for this workspace")
     try:
+        args = _meta_args(req)
         if req.tool == "list_ad_accounts":
             data = await fn(token=req.meta_token)
         elif req.tool == "search_interests":
-            data = await fn(req.args.get("query", ""), token=req.meta_token)
+            data = await fn(args.get("query", ""), token=req.meta_token)
+        elif req.tool == "update_status":
+            cid = args.get("campaign_id") or args.get("object_id")
+            if not cid:
+                raise HTTPException(status_code=400, detail="campaign_id is required")
+            data = await fn(str(cid), args["status"], dry_run=False, token=req.meta_token)
+        elif req.tool == "update_budget":
+            cid = args.get("campaign_id") or args.get("object_id")
+            if not cid:
+                raise HTTPException(status_code=400, detail="campaign_id is required")
+            data = await fn(str(cid), int(args["daily_budget"]), dry_run=False, token=req.meta_token)
         else:
             acct = req.ad_account_id or req.account_id
-            data = await fn(acct, token=req.meta_token, **req.args)
+            data = await fn(acct, token=req.meta_token, **args)
         return {"tool": req.tool, "count": len(data) if isinstance(data, list) else None, "data": data}
     except Exception as e:  # noqa: BLE001
         log.exception("meta tool failed")
@@ -486,6 +519,7 @@ class CampaignPlanRequest(BaseModel):
     countries: Optional[list[str]] = None
     niche: Optional[str] = None
     business_profile: Optional[BusinessProfile] = None
+    locale: Optional[str] = None
 
 
 @router.post("/campaign/plan")
@@ -499,6 +533,7 @@ async def campaign_plan(req: CampaignPlanRequest):
     system_suffix = merge_system_suffix(
         format_business_context_suffix(req.business_profile),
         platform_suffix,
+        format_locale_suffix(req.locale),
     )
     bp = await meta_architect.design_blueprint(
         req.goal, budget_cents=req.budget_cents, pixel_id=req.pixel_id,
@@ -607,12 +642,15 @@ async def campaign_optimize(req: OptimizeRequest):
                 continue
             if v["verdict"] == "KILL":
                 p = await meta_tools.update_status(str(cid), "PAUSED")
-                proposals.append(format_proposal(v, p))
+                tool, params = kill_apply(str(cid))
+                proposals.append(format_proposal(v, p, apply_tool=tool, apply_params=params))
             elif v["verdict"] == "SCALE":
                 cur = budget_by_id.get(str(cid), 0)
                 if cur:
-                    p = await meta_tools.update_budget(str(cid), int(cur * meta_optimizer.SCALE_STEP))
-                    proposals.append(format_proposal(v, p))
+                    new_budget = int(cur * meta_optimizer.SCALE_STEP)
+                    p = await meta_tools.update_budget(str(cid), new_budget)
+                    tool, params = scale_apply(str(cid), new_budget)
+                    proposals.append(format_proposal(v, p, apply_tool=tool, apply_params=params))
     except Exception as e:  # noqa: BLE001
         log.exception("optimize failed")
         await meta_watcher.capture_error(e, context="campaign/optimize")

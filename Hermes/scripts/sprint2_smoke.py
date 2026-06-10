@@ -12,7 +12,7 @@ async def main() -> int:
     from services.meta import optimizer as opt
     from services.meta import tools as t
     from services.meta import mock
-    from services.meta.optimize_contract import format_proposal
+    from services.meta.optimize_contract import format_proposal, kill_apply, scale_apply
     from services import agnt_memory as mem
 
     os.environ["META_MOCK"] = "1"
@@ -25,22 +25,29 @@ async def main() -> int:
         cid = v.get("campaign_id")
         if v["verdict"] == "KILL":
             p = await t.update_status(str(cid), "PAUSED")
-            proposals.append(format_proposal(v, p))
+            tool, params = kill_apply(str(cid))
+            proposals.append(format_proposal(v, p, apply_tool=tool, apply_params=params))
         elif v["verdict"] == "SCALE":
             cur = budget_by_id.get(str(cid), 0)
             if cur:
-                p = await t.update_budget(str(cid), int(cur * opt.SCALE_STEP))
-                proposals.append(format_proposal(v, p))
+                new_budget = int(cur * opt.SCALE_STEP)
+                p = await t.update_budget(str(cid), new_budget)
+                tool, params = scale_apply(str(cid), new_budget)
+                proposals.append(format_proposal(v, p, apply_tool=tool, apply_params=params))
 
     print("=== OPTIMIZE CONTRACT ===")
     print(json.dumps({"proposals": proposals}, indent=2))
-    required = {"action", "summary", "dry_run"}
+    required = {"action", "summary", "dry_run", "apply"}
     for p in proposals:
         if not required.issubset(p.keys()):
             print("FAIL missing keys", p, file=sys.stderr)
             return 1
         if p["dry_run"] is not True:
             print("FAIL dry_run", p, file=sys.stderr)
+            return 1
+        apply = p.get("apply") or {}
+        if not apply.get("tool") or not apply.get("params"):
+            print("FAIL missing apply", p, file=sys.stderr)
             return 1
 
     print("\n=== PLATFORM KNOWLEDGE ===")

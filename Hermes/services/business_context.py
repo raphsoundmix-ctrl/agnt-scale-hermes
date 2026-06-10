@@ -50,6 +50,15 @@ def merge_system_suffix(*parts: Optional[str]) -> Optional[str]:
     return "".join(chunks) if chunks else None
 
 
+def format_locale_suffix(locale: Optional[str]) -> Optional[str]:
+    """Uncached locale hint — never appended to static persona."""
+    if not locale or not str(locale).strip().lower().startswith("ru"):
+        return None
+    return (
+        "\n\nReply in Russian. Keep metric names (CTR/CPL/ROAS) and statuses in English."
+    )
+
+
 def enrich_task_input(agent_id: str, inp: dict[str, Any], profile: Optional[BusinessProfile]) -> dict[str, Any]:
     """Merge business_profile into structured task input for niche-sensitive agents."""
     if not profile or agent_id not in ("creative_strategic", "script_writer"):

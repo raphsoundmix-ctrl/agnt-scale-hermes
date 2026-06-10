@@ -41,8 +41,12 @@ async def main() -> int:
             print("FAIL no proposals", file=sys.stderr)
             return 1
         for p in props:
-            if not {"action", "summary", "dry_run"}.issubset(p.keys()):
+            if not {"action", "summary", "dry_run", "apply"}.issubset(p.keys()):
                 print("FAIL proposal shape", p, file=sys.stderr)
+                return 1
+            apply = p.get("apply") or {}
+            if p["action"] in ("kill", "scale") and not (apply.get("tool") and apply.get("params")):
+                print("FAIL missing apply", p, file=sys.stderr)
                 return 1
             if p["dry_run"] is not True:
                 print("FAIL dry_run", p, file=sys.stderr)
