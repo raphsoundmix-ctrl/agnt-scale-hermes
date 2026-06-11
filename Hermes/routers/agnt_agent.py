@@ -29,6 +29,8 @@ from services.business_context import (
     format_locale_suffix,
     merge_system_suffix,
 )
+from services.integrations import calcom as calcom_int
+from services.integrations import plausible as plausible_int
 from services.mem_maintenance import run_maintenance
 from services.meta import tools as meta_tools
 from services.meta import architect as meta_architect
@@ -51,6 +53,7 @@ class ChatRequest(BaseModel):
     ad_account_id: Optional[str] = None
     business_profile: Optional[BusinessProfile] = None
     locale: Optional[str] = None
+    plausible_site_id: Optional[str] = None  # workspace landing domain in Plausible
 
 
 class ChatResponse(BaseModel):
@@ -68,6 +71,7 @@ class RunRequest(BaseModel):
     ad_account_id: Optional[str] = None
     business_profile: Optional[BusinessProfile] = None
     locale: Optional[str] = None
+    plausible_site_id: Optional[str] = None
 
 
 class NoteRequest(BaseModel):
@@ -96,6 +100,30 @@ def _require_account_id(account_id: Optional[str]) -> str:
     if not account_id or not str(account_id).strip():
         raise HTTPException(status_code=400, detail="account_id is required")
     return str(account_id).strip()
+
+
+_ANALYTICS_AGENTS = frozenset({
+    "orchestrator", "optimizer", "objective_interpreter", "campaign_architect",
+    "ad_setting", "assistant",
+})
+
+
+async def _integrations_suffix(
+    agent_id: str,
+    *,
+    plausible_site_id: Optional[str] = None,
+) -> Optional[str]:
+    """Optional Plausible + Cal.com context for planning/analytics agents (uncached)."""
+    if agent_id not in _ANALYTICS_AGENTS:
+        return None
+    parts: list[str] = []
+    p = await plausible_int.format_context_suffix(plausible_site_id)
+    if p:
+        parts.append(p)
+    c = await calcom_int.format_context_suffix()
+    if c:
+        parts.append(c)
+    return "".join(parts) if parts else None
 
 
 async def _platform_knowledge_suffix(query: str) -> Optional[str]:
@@ -309,11 +337,15 @@ async def chat(req: ChatRequest):
             "\n\nShared memory across all agents for this account (relevant first):\n" + ctx
         )
         platform = await _platform_knowledge_suffix(req.message)
+        integrations = await _integrations_suffix(
+            req.agent_id, plausible_site_id=req.plausible_site_id,
+        )
         system_suffix = merge_system_suffix(
             system_suffix,
             platform,
             format_business_context_suffix(req.business_profile),
             format_locale_suffix(req.locale),
+            integrations,
         )
         msgs = [{"role": "user", "content": req.message}]
     else:
@@ -340,11 +372,15 @@ async def chat(req: ChatRequest):
                 "\n\nRelevant long-term memory (your prior findings):\n" + block
             )
         platform = await _platform_knowledge_suffix(req.message)
+        integrations = await _integrations_suffix(
+            req.agent_id, plausible_site_id=req.plausible_site_id,
+        )
         system_suffix = merge_system_suffix(
             system_suffix,
             platform,
             format_business_context_suffix(req.business_profile),
             format_locale_suffix(req.locale),
+            integrations,
         )
 
     try:
@@ -376,9 +412,13 @@ async def run(req: RunRequest):
         raise HTTPException(status_code=400, detail=f"agent {req.agent_id} has no structured task (use /chat)")
 
     user = spec["build"](enrich_task_input(req.agent_id, req.input, req.business_profile))
+    integrations = await _integrations_suffix(
+        req.agent_id, plausible_site_id=getattr(req, "plausible_site_id", None),
+    )
     biz_suffix = merge_system_suffix(
         format_business_context_suffix(req.business_profile),
         format_locale_suffix(req.locale),
+        integrations,
     )
     result = await _llm_json(
         spec["system"], user, agent["model"], max_tokens=spec["max_tokens"],
@@ -520,6 +560,7 @@ class CampaignPlanRequest(BaseModel):
     niche: Optional[str] = None
     business_profile: Optional[BusinessProfile] = None
     locale: Optional[str] = None
+    plausible_site_id: Optional[str] = None
 
 
 @router.post("/campaign/plan")
@@ -530,10 +571,14 @@ async def campaign_plan(req: CampaignPlanRequest):
         raise HTTPException(status_code=400, detail="goal is required")
     account_id = _require_account_id(req.account_id)
     platform_suffix = await _platform_knowledge_suffix(req.goal)
+    integrations = await _integrations_suffix(
+        "campaign_architect", plausible_site_id=req.plausible_site_id,
+    )
     system_suffix = merge_system_suffix(
         format_business_context_suffix(req.business_profile),
         platform_suffix,
         format_locale_suffix(req.locale),
+        integrations,
     )
     bp = await meta_architect.design_blueprint(
         req.goal, budget_cents=req.budget_cents, pixel_id=req.pixel_id,
