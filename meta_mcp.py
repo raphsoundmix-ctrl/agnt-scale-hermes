@@ -87,20 +87,6 @@ async def meta_learn() -> dict:
 
 
 @mcp.tool()
-async def plausible_stats(site_id: str, period: str = "7d") -> dict:
-    """Landing-page stats (Plausible). Set PLAUSIBLE_API_KEY + PLAUSIBLE_API_URL in MCP env."""
-    base = os.environ.get("PLAUSIBLE_API_URL", "https://plausible.io").rstrip("/")
-    key = os.environ.get("PLAUSIBLE_API_KEY", "")
-    async with httpx.AsyncClient(timeout=30) as c:
-        r = await c.get(
-            f"{base}/api/v1/stats/aggregate",
-            headers={"Authorization": f"Bearer {key}"},
-            params={"site_id": site_id, "period": period, "metrics": "visitors,pageviews,bounce_rate"},
-        )
-        return r.json()
-
-
-@mcp.tool()
 async def calcom_event_types() -> dict:
     """List Cal.com event types. Set CALCOM_API_KEY in MCP env."""
     base = os.environ.get("CALCOM_API_URL", "https://api.cal.com").rstrip("/")

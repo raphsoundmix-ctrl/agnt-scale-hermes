@@ -1,1 +1,1 @@
-"""Optional third-party integrations for campaign planning and site analytics."""
+"""Optional third-party integrations for campaign planning (Cal.com scheduling)."""
