@@ -91,13 +91,16 @@ async def calcom_event_types() -> dict:
     """List Cal.com event types. Set CALCOM_API_KEY in MCP env."""
     base = os.environ.get("CALCOM_API_URL", "https://api.cal.com").rstrip("/")
     key = os.environ.get("CALCOM_API_KEY", "")
+    user = os.environ.get("CALCOM_USERNAME", "").strip()
+    params = {"username": user} if user else None
     async with httpx.AsyncClient(timeout=30) as c:
         r = await c.get(
             f"{base}/v2/event-types",
             headers={
                 "Authorization": f"Bearer {key}",
-                "cal-api-version": os.environ.get("CALCOM_API_VERSION", "2024-08-13"),
+                "cal-api-version": os.environ.get("CALCOM_API_VERSION", "2024-06-14"),
             },
+            params=params,
         )
         return r.json()
 

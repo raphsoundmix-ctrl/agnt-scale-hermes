@@ -22,13 +22,15 @@ def _headers() -> dict[str, str]:
         raise ValueError("CALCOM_API_KEY not configured")
     return {
         "Authorization": f"Bearer {key}",
-        "cal-api-version": os.environ.get("CALCOM_API_VERSION", "2024-08-13"),
+        "cal-api-version": os.environ.get("CALCOM_API_VERSION", "2024-06-14"),
     }
 
 
-async def list_event_types() -> list[dict[str, Any]]:
+async def list_event_types(*, username: Optional[str] = None) -> list[dict[str, Any]]:
+    user = (username or os.environ.get("CALCOM_USERNAME") or "").strip()
+    params = {"username": user} if user else None
     async with httpx.AsyncClient(timeout=30) as client:
-        r = await client.get(f"{_base()}/v2/event-types", headers=_headers())
+        r = await client.get(f"{_base()}/v2/event-types", headers=_headers(), params=params)
         r.raise_for_status()
         body = r.json()
         if isinstance(body, dict) and "data" in body:
