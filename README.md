@@ -1,10 +1,12 @@
 # AGNT SCALE — Hermes Agent Runtime
 
-Server-side AI agent engine for **AGNT SCALE** (AI Decision OS for Meta Ads).
+Server-side **brain** of **AGNT SCALE** (AI Decision OS for Meta Ads).
 Path-A native runtime: an isolated FastAPI gateway, **not** coupled to MAO.
 
-- **App (Next.js, on Vercel):** https://github.com/raphsoundmix-ctrl/agnt_scale_meta
-- **This repo:** the agent layer — agents, memory (Postgres RLS + local embeddings), orchestration.
+- **UI (Next.js, Vercel):** [agnt_scale_meta](https://github.com/raphsoundmix-ctrl/agnt_scale_meta) — dashboards, Meta OAuth, proxy to Hermes
+- **This repo (Hermes):** agents, memory (Postgres RLS + embeddings), Meta execute/optimize, orchestration
+
+Architecture: `docs/agnt-scale-architecture.md`
 
 ## Stack
 - FastAPI gateway (`Hermes/`), token-auth via `X-Internal-Token`
