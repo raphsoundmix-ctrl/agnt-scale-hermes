@@ -7,6 +7,8 @@ import json
 import os
 import sys
 
+import _bootstrap  # noqa: F401
+
 
 async def main() -> int:
     from services.meta import optimizer as opt

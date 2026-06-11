@@ -8,6 +8,8 @@ import os
 import re
 import sys
 
+import _bootstrap  # noqa: F401
+
 ACCT = "applylocalesmoke"
 BASE = os.environ.get("HERMES_SMOKE_URL", "http://127.0.0.1:7777")
 

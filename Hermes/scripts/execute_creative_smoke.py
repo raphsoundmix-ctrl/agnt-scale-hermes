@@ -7,6 +7,8 @@ import json
 import os
 import sys
 
+import _bootstrap  # noqa: F401
+
 ACCT = "executecreativesmoke"
 BASE = os.environ.get("HERMES_SMOKE_URL", "http://127.0.0.1:7777")
 
