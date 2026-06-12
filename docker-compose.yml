@@ -23,6 +23,15 @@ services:
         condition: service_started
     networks:
       - agnt-internal
+    # cpu_shares — мягкий вес: при простое можно занять все ядра,
+    # при конкуренции с mao-hermes (тоже 1024) CPU делится поровну
+    cpu_shares: 1024
+    deploy:
+      resources:
+        limits:
+          memory: 1536M
+        reservations:
+          memory: 512M
   postgres:
     image: pgvector/pgvector:pg16
     container_name: agnt-postgres
@@ -40,6 +49,13 @@ services:
       retries: 10
     networks:
       - agnt-internal
+    cpu_shares: 512
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 128M
   redis:
     image: redis:7-alpine
     container_name: agnt-redis
@@ -51,6 +67,11 @@ services:
       retries: 5
     networks:
       - agnt-internal
+    cpu_shares: 256
+    deploy:
+      resources:
+        limits:
+          memory: 256M
   qdrant:
     image: qdrant/qdrant:latest
     container_name: agnt-qdrant
@@ -59,6 +80,11 @@ services:
       - agnt-qdrant:/qdrant/storage
     networks:
       - agnt-internal
+    cpu_shares: 256
+    deploy:
+      resources:
+        limits:
+          memory: 512M
 networks:
   agnt-internal:
     driver: bridge

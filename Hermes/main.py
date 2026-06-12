@@ -120,7 +120,9 @@ app.add_middleware(
 # Backend on the internal Docker network. Even so, defence-in-depth:
 # every protected route requires a shared secret in X-Internal-Token.
 # Health endpoints are public so Docker / k8s probes work without auth.
-_PUBLIC_PATHS: set[str] = {"/", "/health", "/healthz", "/health/ready", "/docs", "/openapi.json"}
+# /docs и /openapi.json закрыты: сервис публичен через Funnel,
+# схема API не должна быть видна без X-Internal-Token.
+_PUBLIC_PATHS: set[str] = {"/", "/health", "/healthz", "/health/ready"}
 
 
 @app.middleware("http")
