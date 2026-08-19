@@ -127,6 +127,51 @@ everything else                            → HOLD
 
 ---
 
+## How I build an agent
+
+Every agent in this roster went through the same pipeline — the one I use for my own and
+client agents outside this repo as well.
+
+**1. Start from the job, not the model.** One agent = one job with a definable failure
+cost. The failure cost decides the split: anything a client could argue with (a Kill
+verdict, a budget step) is deterministic code; judgment and synthesis go to the model.
+
+**2. Ground truth before prompts.** An agent is only as good as the facts it argues from,
+so I collect source-of-truth material — official API docs, platform changelogs, my own
+campaign data — and distill it into a primer the agent retrieves. Here that is
+`services/meta/knowledge.py`, seeded into platform-knowledge memory and kept current by the
+drift watcher. No blog folklore in the context window.
+
+**3. Prompt and logic as separate artifacts.** The prompt carries persona and judgment;
+thresholds, gates and money rules live in code. Output is a strict JSON contract, so
+downstream code never parses prose.
+
+**4. Obsidian as the local knowledge base and agent memory.** Design docs, ADRs and
+operating playbooks live in a local Obsidian vault — this system's design contract is ADR
+**Р-31** there. For personal agents the vault *is* the database and memory: agents read and
+write plain markdown. Local-first, versionable, greppable, zero vendor lock-in. When a
+project graduates to multi-tenant production, the same memory model is re-implemented on
+Postgres + RLS — which is exactly what this repo is.
+
+**5. Code memory + graphify, for token economy and fast recall.**
+- *Code memory* — durable knowledge is stored as compact structured artifacts (enums,
+  tables, manifests) instead of prose. `knowledge.py` is the in-repo example: the whole
+  ODAX objective model with per-objective defaults loads into context in a few hundred
+  tokens.
+- *Graphify* — vault notes are linked into a graph, so retrieval walks relations from the
+  entry node and injects only the top connected notes instead of embedding-searching a
+  whole corpus. The in-repo equivalent is deliberately scoped semantic recall: top-3/top-4
+  rows, hard-capped snippet lengths, RLS-fenced.
+
+Both compose with the caching split in `llm_router.py`: static persona cached, dense
+retrieved context appended uncached.
+
+**6. Evals before autonomy.** Mock mode makes the whole surface exercisable offline;
+features ship dormant and get enabled on evidence; prompts never self-deploy to accounts
+moving real budget. Autonomy is earned per agent, not granted by default.
+
+---
+
 ## API surface
 
 All routes require `X-Internal-Token`; only `/health*` is public.
@@ -231,9 +276,17 @@ attribution bridge so CPA is *true* CPA.
 
 ## Author
 
-**Raphael Kuldashev** — performance marketing and AI automation. I build the systems I use:
-Meta Ads operating playbooks encoded as agents, with the approval gates a real ad budget
-requires.
+**Raphael Kuldashev** — AI Automation Engineer · Forward-Deployed Engineer (FDE) ·
+Anthropic-certified AI Engineer.
 
-[LinkedIn](https://www.linkedin.com/in/raphael-kuldashev/) · open to roles and collaboration
-in AI automation and performance marketing.
+I design and ship production-ready AI agents and automation systems for businesses that
+need to scale without the overhead: multi-agent LLM backends (Claude · OpenAI), n8n and
+Python orchestration across 10+ external APIs, and generative content pipelines — video
+(Kling, Seedance), image (Nano Banana Pro), voice (ElevenLabs) — grounded in 10+ years of
+sound design and game audio. This repo is one of those systems: my Meta Ads operating
+playbooks encoded as agents, with the approval gates a real ad budget requires.
+
+**Stack:** Python · FastAPI · n8n · Docker · PostgreSQL · Supabase · Redis · MCP · Claude Code
+
+[LinkedIn](https://www.linkedin.com/in/raphael-kuldashev/?locale=en) · open to roles and
+collaboration in AI automation, agent engineering, and performance marketing.
