@@ -10,6 +10,9 @@ __pycache__/
 *.pyd
 .pytest_cache/
 
+# Tests run in CI, not in the runtime image
+tests/
+
 # Local config — NEVER bake secrets into image
 .env
 .env.*

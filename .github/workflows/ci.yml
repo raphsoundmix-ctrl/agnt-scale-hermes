@@ -1,0 +1,31 @@
+# CI — gates on the deterministic core: the logic that touches money.
+# Deliberately installs only pytest+pydantic+httpx: if a test in Hermes/tests
+# ever needs the DB, an API key, or a mock HTTP layer, the dry-run gate or the
+# purity of the verdict layer has been broken — and the build should say so.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Syntax check — whole runtime
+        run: python -m compileall -q Hermes meta_mcp.py
+
+      - name: Install test deps (deterministic core only)
+        run: pip install pytest pydantic httpx
+
+      - name: Unit tests — verdicts, payload builders, dry-run gate, contracts
+        run: pytest Hermes/tests -q
+
+      - name: Engine parity — Python Wilson port ↔ TS engine
+        run: cd Hermes && python -m services.engine._parity
