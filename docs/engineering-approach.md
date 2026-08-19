@@ -178,6 +178,12 @@ Refusals are a design output. These are the ones I would defend in a review:
 - **Ported logic gets a parity test.** `services/engine/wilson.py` is a 1:1 port of a
   TypeScript implementation, and `_parity.py` asserts they agree. `deploy.sh` runs it on
   every deploy.
+- **The money-adjacent core is unit-tested with zero mocks.** `Hermes/tests/` covers the
+  verdict thresholds, Wilson bounds, Meta payload builders and the dry-run gate — and
+  deliberately installs no mock HTTP layer: if a test there ever needs one, a write
+  coroutine has learned to reach the network by default, and CI should fail. The
+  thresholds themselves are pinned by a test, so a silent change to `MIN_SPEND` or
+  `SCALE_STEP` is a red build until the docs move with it.
 - **Mock mode is a first-class path.** `META_MOCK=1` returns fixtures, so the entire Meta
   surface is exercisable without a token — which also makes an offline eval harness cheap
   to add later.

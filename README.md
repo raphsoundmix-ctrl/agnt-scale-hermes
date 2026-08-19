@@ -1,5 +1,11 @@
 # AGNT SCALE — Hermes Agent Runtime
 
+[![CI](https://github.com/raphsoundmix-ctrl/agnt-scale-hermes/actions/workflows/ci.yml/badge.svg)](https://github.com/raphsoundmix-ctrl/agnt-scale-hermes/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-async-009688?logo=fastapi&logoColor=white)
+![LLM](https://img.shields.io/badge/Claude-via%20OpenRouter-d97757)
+![Postgres](https://img.shields.io/badge/Postgres-pgvector%20%2B%20RLS-4169E1?logo=postgresql&logoColor=white)
+
 > **An AI decision layer for Meta Ads that is allowed to think, but not allowed to spend.**
 
 Hermes is the server-side brain of **AGNT SCALE**: a multi-agent runtime that reads a live
@@ -32,6 +38,11 @@ It is a production-shaped system, not a demo wrapper around a chat completion:
   caching, and local CPU embeddings that never send memory text off the server.
 - **It notices when Meta changes underneath it**, by learning from live API errors rather
   than scraping a changelog.
+- **The money-adjacent logic is tested and CI-gated.** Verdict thresholds, Wilson bounds,
+  payload builders and the dry-run gate are covered in `Hermes/tests/` — deliberately
+  runnable with zero keys, zero DB and zero mocks, because if a test there ever needs a
+  mock HTTP layer, the write gate is broken. A TS↔Python parity harness runs on every
+  deploy. Threat model: [`SECURITY.md`](SECURITY.md).
 
 The reasoning behind each of those is written down in
 **[`docs/engineering-approach.md`](docs/engineering-approach.md)** — including the things I
@@ -105,6 +116,33 @@ everything else                            → HOLD
 - **Every created object is `PAUSED`.** Approving a plan and starting spend are two
   separate human acts.
 - Scaling moves in `+20%` steps because larger jumps re-enter the learning phase.
+
+### The approval path
+
+The core product decision, end to end — note where the human sits:
+
+```mermaid
+sequenceDiagram
+    actor Op as Operator
+    participant UI as UI (Vercel)
+    participant H as Hermes
+    participant Meta as Meta Graph API
+
+    Op->>UI: business goal
+    UI->>H: POST /agent/campaign/plan
+    Note over H: architect designs blueprint,<br/>grounded in platform knowledge
+    H-->>UI: blueprint + ordered DRY-RUN plan — nothing created
+    Op->>UI: reviews the plan, approves
+    UI->>H: POST /agent/campaign/execute (approve=true, meta_token)
+    H->>Meta: create campaign → ad sets → creatives → ads
+    Note over H,Meta: every object created PAUSED
+    Meta-->>H: object ids
+    H-->>UI: result (+ written to agent memory)
+    Op->>Meta: activation — a separate, deliberate human act
+```
+
+Same pattern on the optimize side: verdicts arrive as dry-run proposals carrying an
+`apply` payload; a human triggers the apply.
 
 ---
 
@@ -229,6 +267,16 @@ curl localhost:7778/health
 `META_MOCK=1` returns fixtures for the entire Meta surface, so the runtime is fully
 exercisable without a Meta token.
 
+**Tests** — the deterministic core runs anywhere, with no keys and no DB:
+
+```bash
+pip install pytest pydantic httpx
+pytest Hermes/tests -q                          # verdicts, payload builders, dry-run gate
+python -m services.engine._parity               # from Hermes/ — TS↔Python parity
+```
+
+CI runs both on every push (`.github/workflows/ci.yml`).
+
 Server self-update: `./deploy.sh` — pulls, syncs, rebuilds, health-checks, and runs the
 engine parity test. It never touches `.env` and never runs migrations on its own.
 
@@ -264,6 +312,7 @@ attribution bridge so CPA is *true* CPA.
 | [`docs/agnt-scale-architecture.md`](docs/agnt-scale-architecture.md) | Two-layer architecture and the live Meta chain |
 | [`docs/meta-oauth-hermes-bridge.md`](docs/meta-oauth-hermes-bridge.md) | Meta App setup, OAuth scopes, env wiring |
 | [`docs/meta-mcp.md`](docs/meta-mcp.md) | The custom MCP server |
+| [`SECURITY.md`](SECURITY.md) | Threat model — trust boundaries, what closes each one, and where |
 | [`ISOLATION.md`](ISOLATION.md) | Shared-host isolation contract — reserved ports, names, paths |
 | [`Hermes/FUTURE_WORK.md`](Hermes/FUTURE_WORK.md) | What is deferred, and the reasoning for deferring it |
 | [`Hermes/docs/AGENT_MEMORY_AUDIT.md`](Hermes/docs/AGENT_MEMORY_AUDIT.md) | Memory schema audit and maintenance design |
