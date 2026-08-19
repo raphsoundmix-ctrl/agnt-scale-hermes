@@ -200,8 +200,8 @@ async def _post_openrouter(model: str, messages: list, **kw) -> dict:
     timeout = kw.pop("timeout", 60)
     headers = {
         "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
-        "HTTP-Referer": getattr(settings, "OPENROUTER_REFERER", "https://mao.ai"),
-        "X-Title": "MAO.ai",
+        "HTTP-Referer": getattr(settings, "OPENROUTER_REFERER", "https://agnt-scale.ai"),
+        "X-Title": "AGNT SCALE",
         "Content-Type": "application/json",
     }
     body = {"model": model, "messages": messages, **kw}

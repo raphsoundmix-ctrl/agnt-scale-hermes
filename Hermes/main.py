@@ -1,6 +1,8 @@
 """
-Hermes Gateway — MAO.ai Agent Runtime
-Runs in WSL2 on :7777, accessed by FastAPI Docker via host.docker.internal:7777
+Hermes Gateway — AGNT SCALE Agent Runtime.
+
+Listens on :7777 inside the container, published on host :7778 (see ISOLATION.md).
+Public ingress in prod is Tailscale Funnel :8443 → 127.0.0.1:7778, token-gated.
 """
 import asyncio
 import os
@@ -99,7 +101,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Hermes Gateway",
-    description="MAO.ai Agent Runtime — handles Skills, Memory, LLM calls",
+    description="AGNT SCALE Agent Runtime — agents, RLS memory, Meta plan/execute/optimize",
     version="0.1.0",
     lifespan=lifespan,
     docs_url="/docs" if settings.APP_ENV != "production" else None,

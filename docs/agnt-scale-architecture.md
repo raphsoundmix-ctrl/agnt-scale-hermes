@@ -65,4 +65,7 @@ HERMES_INTERNAL_TOKEN=<тот же, что в Hermes/.env>
 - App OAuth: добавить `ads_management`, убрать `read_insights` из callback
 - UI: кнопки Optimize / Plan / Chat должны бить в прокси, не в OpenRouter напрямую
 
-См. также: `docs/meta-oauth-hermes-bridge.md` (пошаговый setup Meta App + env).
+См. также:
+- `docs/meta-oauth-hermes-bridge.md` — пошаговый setup Meta App + env
+- `docs/engineering-approach.md` — принципы и обоснование архитектурных решений
+- `docs/roadmap.md` — Hermes Agent (tool-loop) + база кастомных агентов
